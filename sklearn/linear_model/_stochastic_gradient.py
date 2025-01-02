@@ -178,7 +178,7 @@ class BaseSGD(SparseCoefMixin, BaseEstimator, metaclass=ABCMeta):
         loss_class, args = loss_[0], loss_[1:]
         if loss in ("huber", "epsilon_insensitive", "squared_epsilon_insensitive"):
             args = (self.epsilon,)
-        loss_args = args + loss_args
+        loss_args = tuple(args) + tuple(loss_args)
         return loss_class(*loss_args, **loss_kwargs)
 
     def _get_learning_rate_type(self, learning_rate):
