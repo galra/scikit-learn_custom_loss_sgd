@@ -36,6 +36,8 @@ from ._sgd_fast import (
     ModifiedHuber,
     SquaredEpsilonInsensitive,
     SquaredHinge,
+    ModifiedHuberUnbiasedProxy,
+    HingeUnbiasedProxy,
     _plain_sgd32,
     _plain_sgd64,
 )
@@ -161,11 +163,23 @@ class BaseSGD(SparseCoefMixin, BaseEstimator, metaclass=ABCMeta):
 
     def _get_loss_function(self, loss):
         """Get concrete ``LossFunction`` object for str ``loss``."""
-        loss_ = self.loss_functions[loss]
+        if isinstance(loss, str):
+            loss_name = loss
+            loss_kwargs = {}
+            loss_args = []
+        else:
+            loss_name = loss[0]
+            loss_args = loss[1] if isinstance(loss[1], (list, tuple)) else []
+            loss_kwargs = loss[1] if isinstance(loss[1], dict) else {}
+            if loss_name not in self.loss_functions:
+                raise ValueError(f"Unknown loss '{loss_name}', should be one of {list(self.loss_functions.keys())}")
+
+        loss_ = self.loss_functions[loss_name]
         loss_class, args = loss_[0], loss_[1:]
         if loss in ("huber", "epsilon_insensitive", "squared_epsilon_insensitive"):
             args = (self.epsilon,)
-        return loss_class(*args)
+        loss_args = args + loss_args
+        return loss_class(*loss_args, **loss_kwargs)
 
     def _get_learning_rate_type(self, learning_rate):
         return LEARNING_RATE_TYPES[learning_rate]
@@ -509,11 +523,13 @@ class BaseSGDClassifier(LinearClassifierMixin, BaseSGD, metaclass=ABCMeta):
         "huber": (CyHuberLoss, DEFAULT_EPSILON),
         "epsilon_insensitive": (EpsilonInsensitive, DEFAULT_EPSILON),
         "squared_epsilon_insensitive": (SquaredEpsilonInsensitive, DEFAULT_EPSILON),
+        "hinge_unbiased_proxy": (HingeUnbiasedProxy, 1.0),
+        "modified_huber_unbiased_proxy": (ModifiedHuberUnbiasedProxy,),
     }
 
     _parameter_constraints: dict = {
         **BaseSGD._parameter_constraints,
-        "loss": [StrOptions(set(loss_functions))],
+        "loss": [StrOptions(set(loss_functions)), tuple, list],
         "early_stopping": ["boolean"],
         "validation_fraction": [Interval(Real, 0, 1, closed="neither")],
         "n_iter_no_change": [Interval(Integral, 1, None, closed="left")],
@@ -971,7 +987,8 @@ class SGDClassifier(BaseSGDClassifier):
     ----------
     loss : {'hinge', 'log_loss', 'modified_huber', 'squared_hinge',\
         'perceptron', 'squared_error', 'huber', 'epsilon_insensitive',\
-        'squared_epsilon_insensitive'}, default='hinge'
+        'squared_epsilon_insensitive', 'hinge_unbiased_proxy',\
+         'modified_huber_unbiased_proxy'}, default='hinge'
         The loss function to be used.
 
         - 'hinge' gives a linear SVM.
@@ -980,6 +997,10 @@ class SGDClassifier(BaseSGDClassifier):
           outliers as well as probability estimates.
         - 'squared_hinge' is like hinge but is quadratically penalized.
         - 'perceptron' is the linear loss used by the perceptron algorithm.
+        - 'hinge_unbiased_proxy' is a variant of hinge loss that is unbiased,
+           see Natarajan et al. NIPS 2013.
+        - 'modified_huber_unbiased_proxy' is a variant of modified huber loss that is unbiased,
+           see Natarajan et al. NIPS 2013.
         - The other losses, 'squared_error', 'huber', 'epsilon_insensitive' and
           'squared_epsilon_insensitive' are designed for regression but can be useful
           in classification as well; see
@@ -1393,7 +1414,7 @@ class BaseSGDRegressor(RegressorMixin, BaseSGD):
 
     _parameter_constraints: dict = {
         **BaseSGD._parameter_constraints,
-        "loss": [StrOptions(set(loss_functions))],
+        # "loss": [StrOptions(set(loss_functions))],
         "early_stopping": ["boolean"],
         "validation_fraction": [Interval(Real, 0, 1, closed="neither")],
         "n_iter_no_change": [Interval(Integral, 1, None, closed="left")],

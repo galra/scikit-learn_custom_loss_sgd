@@ -151,6 +151,79 @@ cdef class ModifiedHuber(Classification):
         return ModifiedHuber, ()
 
 
+cdef class ModifiedHuberUnbiasedProxy(Classification):
+    """Unbiased proxy loss function (Natarajan et al., 2013) for the modified Huber loss for binary classification
+    with y in {-1, 1}. The loss is defined as:
+    ((1-rho_-y) * modified_huber(y, p) - rho_y * modified_huber(-y, p)) / (1 - rho_y - rho_-y)
+
+    This is equivalent to quadratically smoothed SVM with gamma = 2.
+
+    See T. Zhang 'Solving Large Scale Linear Prediction Problems Using
+    Stochastic Gradient Descent', ICML'04.
+    """
+    cdef double rho_1
+    cdef double rho_minus_1
+
+    def __init__(self, double rho_1, double rho_minus_1):
+        self.rho_1 = rho_1
+        self.rho_minus_1 = rho_minus_1
+
+    cdef double cy_loss(self, double y, double p) noexcept nogil:
+        cdef double rho_y = self.rho_1
+        cdef double rho_minus_y = self.rho_minus_1
+        cdef double z = p * y
+        cdef double mhuber_y = 0
+        cdef double mhuber_minus_y = 0
+
+        if self.rho_1 + self.rho_minus_1 >= 1:
+            return 1
+
+        if y == -1:
+            rho_y = self.rho_minus_1
+            rho_minus_y = self.rho_1
+
+        if z >= 1.0:
+            mhuber_y = 0
+            mhuber_minus_y = 4.0 * z
+        elif z >= -1.0:
+            mhuber_y = (1.0 - z) * (1.0 - z)
+            mhuber_minus_y = (1.0 + z) * (1.0 + z)
+        else:
+            mhuber_y =  -4.0 * z
+            mhuber_minus_y = 0
+
+        return ((1 - rho_minus_y) * mhuber_y - rho_y * mhuber_minus_y) / (1 - rho_y - rho_minus_y)
+
+    cdef double cy_gradient(self, double y, double p) noexcept nogil:
+        cdef double rho_y = self.rho_1
+        cdef double rho_minus_y = self.rho_minus_1
+        cdef double z = p * y
+        cdef double mhuber_grad_y = 0
+        cdef double mhuber_grad_minus_y = 0
+
+        if self.rho_1 + self.rho_minus_1 >= 1:
+            return 1
+
+        if y == -1:
+            rho_y = self.rho_minus_1
+            rho_minus_y = self.rho_1
+
+        if z >= 1.0:
+            mhuber_grad_y = 0
+            mhuber_grad_minus_y = 4.0 * y
+        elif z >= -1.0:
+            mhuber_grad_y = 2.0 * (1.0 - z) * -y
+            mhuber_grad_minus_y = 2.0 * (1.0 + z) * y
+        else:
+            mhuber_grad_y = -4.0 * y
+            mhuber_grad_minus_y = 0
+
+        return ((1 - rho_minus_y) * mhuber_grad_y - rho_y * mhuber_grad_minus_y) / (1 - rho_y - rho_minus_y)
+
+    def __reduce__(self):
+        return ModifiedHuberUnbiasedProxy, (self.rho_1, self.rho_minus_1,)
+
+
 cdef class Hinge(Classification):
     """Hinge loss for binary classification tasks with y in {-1,1}
 
@@ -182,6 +255,74 @@ cdef class Hinge(Classification):
     def __reduce__(self):
         return Hinge, (self.threshold,)
 
+
+cdef class HingeUnbiasedProxy(Classification):
+    """Unbiased proxy loss function (Natarajan et al., 2013) for the hinge loss function,
+    for binary classification tasks with y in {-1,1}. The loss is defined as:
+    ((1-rho_-y) * hinge(y, p) - rho_y * hinge(-y, p)) / (1 - rho_y - rho_-y)
+
+    Parameters:
+    rho_1 : float > 0.0
+        P(y=-1 | real_y = 1)
+    rho_minus_1 : float > 0.0
+        P(y=1 | real_y = -1)
+    threshold : float > 0.0
+        Margin threshold. When threshold=1.0, one gets the loss used by SVM.
+        When threshold=0.0, one gets the loss used by the Perceptron.
+    """
+
+    cdef double rho_1
+    cdef double rho_minus_1
+    cdef double threshold
+
+    def __init__(self, double threshold=1.0, double rho_1=0.1, double rho_minus_1=0.1):
+        self.rho_1 = rho_1
+        self.rho_minus_1 = rho_minus_1
+        self.threshold = threshold
+
+    cdef double cy_loss(self, double y, double p) noexcept nogil:
+        cdef double z1 = p * y
+        cdef double z2 = -p * y
+
+        # undefined behavior if rho_1 + rho_minus_1 >= 1
+        if self.rho_1 + self.rho_minus_1 >= 1:
+            return 1
+
+        if z1 <= self.threshold:
+            z1 =  self.threshold - z1
+        else:
+            z1 = 0
+
+        if z2 <= self.threshold:
+            z2 =  self.threshold - z2
+        else:
+            z2 = 0
+
+        if y == 1:
+            return ((1 - self.rho_minus_1) * z1 - self.rho_1 * z2) / (1 - self.rho_1 - self.rho_minus_1)
+        else:
+            return ((1 - self.rho_1) * z1 - self.rho_minus_1 * z2) / (1 - self.rho_1 - self.rho_minus_1)
+
+    cdef double cy_gradient(self, double y, double p) noexcept nogil:
+        cdef double z1 = p * y
+        cdef double z2 = -p * y
+        cdef double rho_y = self.rho_1 if y == 1 else self.rho_minus_1
+        cdef double rho_minus_y = self.rho_minus_1 if y == 1 else self.rho_1
+        cdef double denominator = 1 - self.rho_1 - self.rho_minus_1
+
+        # undefined behavior if rho_1 + rho_minus_1 >= 1
+        if denominator <= 0:
+            return 0
+
+        if z1 <= -self.threshold:
+            return -(1-rho_minus_y) * y / denominator
+        elif z1 > self.threshold:
+            return -rho_y * y / denominator
+        else:
+            return -(1-rho_minus_y+rho_y) * y / denominator
+
+cdef __reduce__(self):
+    return HingeUnbiasedProxy, (self.rho_1, self.rho_minus_1, self.threshold)
 
 cdef class SquaredHinge(Classification):
     """Squared Hinge loss for binary classification tasks with y in {-1,1}
