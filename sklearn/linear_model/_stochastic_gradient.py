@@ -165,8 +165,8 @@ class BaseSGD(SparseCoefMixin, BaseEstimator, metaclass=ABCMeta):
         """Get concrete ``LossFunction`` object for str ``loss``."""
         if isinstance(loss, str):
             loss_name = loss
-            loss_kwargs = {}
-            loss_args = []
+            loss_kwargs = dict()
+            loss_args = tuple()
         else:
             loss_name = loss[0]
             loss_args = loss[1] if isinstance(loss[1], (list, tuple)) else []
